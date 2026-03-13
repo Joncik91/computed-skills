@@ -137,7 +137,7 @@ def main():
 
 - Python 3.8+ (or any language that prints to stdout)
 - A skill system that supports `!`command`` preprocessing
-- Works with [Claude Code](https://claude.ai/claude-code) and [OpenClaw](https://openclaw.com)
+- Works with [Claude Code](https://claude.ai/claude-code) and [OpenClaw](https://openclaw.ai)
 
 ## License
 
