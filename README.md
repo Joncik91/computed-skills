@@ -133,6 +133,23 @@ def main():
         print(f"\n<!-- generator error: {e} -->")
 ```
 
+## Prior art
+
+The [`!`command`` syntax](https://code.claude.com/docs/en/skills#inject-dynamic-context) that makes this possible is documented by Anthropic under "inject dynamic context" — but it's easy to miss, and almost nobody uses it for full prompt generation.
+
+As of March 2026:
+
+- **Anthropic's own [skills repo](https://github.com/anthropics/skills/)** (17 skills) — all static markdown, zero computed skills
+- **[SkillsMP](https://skillsmp.com)** (400K+ indexed skills) — no category or tag for computed/dynamic skills
+- **GitHub-wide code search** for `!`python` in SKILL.md files — returns two results: this repo and [vibereq](https://github.com/dipasqualew/vibereq)
+
+[vibereq](https://github.com/dipasqualew/vibereq) is the only other project we've found using the pattern in production. It injects requirements from checkpoint transcripts into code review skills via `!`python3 scripts/get-intents.py``, and has a meta-skill that generates new computed skills. They use the pattern but don't document it.
+
+Related but different approaches:
+
+- **[DSPy](https://dspy.ai/)** (Stanford) — programmatic prompt compilation via a framework. Same idea (programs generate prompts), but requires adopting a full SDK
+- **[Context engineering](https://martinfowler.com/articles/exploring-gen-ai/context-engineering-coding-agents.html)** — the broader concept of curating what the model sees. Computed skills are one implementation of this
+
 ## Requirements
 
 - Python 3.8+ (or any language that prints to stdout)
