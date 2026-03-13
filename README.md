@@ -1,151 +1,142 @@
 # Computed Skills
 
-## What's a skill?
-
-A skill is a markdown file that tells an AI agent what to do. You write instructions, the agent follows them.
-
-```markdown
-# SKILL.md
-
-When reviewing code:
-1. Check for bugs
-2. Check for security issues
-3. Check for consistency
-```
-
-This works. The agent reads it, does what it says. Every time, the same instructions.
-
-## The problem
-
-The same instructions fire no matter what.
-
-Changed 2 login files? "Check for bugs, security, consistency."
-Changed 40 config files? "Check for bugs, security, consistency."
-
-The agent can't prioritize because you didn't prioritize. You wrote one set of instructions for every possible situation.
-
-It gets worse when skills manage data. Say your agent tracks mistakes it made — 87 entries across 3 files. Every session, the agent re-reads all 1,200 lines to check for duplicates before logging a new one. That's the agent doing data parsing. Slowly. Expensively. When Python could do it in milliseconds.
-
-## Computed skills
-
-What if the skill was a program that *generates* the instructions?
+**Skills that write themselves based on what's happening right now.**
 
 ```
-Skill (static):    Markdown ───────────────────────→ Agent
-Skill (computed):  Markdown → Script → Markdown ──→ Agent
+Static skill:    SKILL.md ──────────────────────────→ Agent reads markdown
+Computed skill:  SKILL.md → runs script → markdown ─→ Agent reads markdown
 ```
 
-The agent still receives markdown. That doesn't change. But the markdown comes from a script that looked at the situation first.
+The agent always receives markdown. But with computed skills, that markdown comes from a script that analyzed the situation first — so the instructions adapt to context instead of being the same every time.
 
-The SKILL.md becomes a one-liner that calls the script:
+## Why
+
+Static skills give the same instructions regardless of context:
+
+- Changed 2 auth files? *"Check for bugs, security, consistency."*
+- Changed 40 config files? *"Check for bugs, security, consistency."*
+
+The agent can't prioritize because the instructions don't. A script can look at the git diff, see that auth files changed, and tell the agent to focus 50% of its attention on security.
+
+It gets worse when skills manage data. An agent tracking its own mistakes across 87 entries shouldn't re-read 1,200 lines every session to check for duplicates — Python can parse that in milliseconds and hand the agent a summary.
+
+## How it works
+
+A computed skill has the same structure as any skill, but the SKILL.md delegates to a script:
+
+```
+my-skill/
+├── SKILL.md              # Thin shell — calls the script
+└── scripts/
+    └── generate.py       # The brain — outputs markdown to stdout
+```
+
+The SKILL.md is a one-liner:
 
 ```yaml
 ---
-name: code-review
-description: Context-aware code review
+name: smart-review
+description: Context-aware code review that adapts based on what changed
 ---
 
 !`python3 ${CLAUDE_SKILL_DIR}/scripts/generate.py $ARGUMENTS`
 ```
 
-The [`!`command`` syntax](https://code.claude.com/docs/en/skills#inject-dynamic-context) is a preprocessing step built into the skill system. It runs shell commands before the skill content reaches the agent, and replaces the command with its output. The script prints markdown to stdout. That output becomes the instructions.
+The [`!`command`` syntax](https://code.claude.com/docs/en/skills#inject-dynamic-context) is a preprocessing directive. It runs the shell command before the agent sees anything, and replaces itself with the command's stdout. The agent never knows a script was involved — it just sees tailored markdown.
 
-## What the script does
+### What the script can do
 
-The script is where the thinking happens. It can:
+| Capability | Example |
+|---|---|
+| **Read context** | Check `git diff`, count files, detect file types |
+| **Pick a strategy** | Auth files → security focus. Config files → consistency focus |
+| **Pre-digest data** | Parse 1,200 lines of entries, hand the agent a 20-line summary |
+| **Remember past runs** | Track state in a JSON file between invocations |
 
-**Read context.** What files changed? Are they security-sensitive? Is this a big refactor or a small fix?
+## Examples
 
-**Pick a strategy.** 2 auth files → focus on security. 40 config files → focus on consistency. Test-only changes → focus on correctness.
+This repo includes three working examples from a production agent system.
 
-**Remember past runs.** A JSON file tracks what happened last time. Used the same strategy twice? Add a "fresh eyes" pass. Past reviews missed error handling? Weight that higher.
+### [`smart-review`](examples/smart-review) — Adaptive code review
 
-**Pre-digest data.** Instead of the agent parsing 1,200 lines of structured entries, the script does it and hands the agent a summary: "4 entries need promotion, 12 are stale, here's the next sequence number."
+The script reads git state and picks a review strategy:
 
-The agent gets instructions tailored to right now, not instructions written for every possible situation.
-
-## Example: code review
-
-A static code review skill gives the same checklist every time. The computed version reads git and adapts.
-
-**2 auth files changed:**
 ```
-Review Strategy: deep (line-by-line)
-Signals: security-sensitive files detected
+2 auth files changed         →  "Security Review: check for hardcoded secrets,
+                                  validate input sanitization, verify auth on new routes"
 
-Lens weights:
-- Safety       ██████████░░░░░░░░░░ 50%  ← focus here
-- Correctness  ██████░░░░░░░░░░░░░░ 30%
-- Robustness   ███░░░░░░░░░░░░░░░░░ 15%
-- Consistency  █░░░░░░░░░░░░░░░░░░░  5%
+22 config files changed      →  "Configuration Audit: check for breaking changes,
+                                  validate YAML/JSON syntax, look for secrets in config"
 
-⚠ Security Alert: check for hardcoded secrets, .env exposure
+3 test files in a project    →  "Test Quality Review: check edge cases,
+without established tests         look for flaky patterns, verify assertion specificity"
 ```
 
-**22 config files changed:**
-```
-Review Strategy: architectural (forest over trees)
-Signals: config-heavy change, possible refactor
+It also tracks past runs — if the same strategy fires twice in a row, it adds a "fresh eyes" pass. If past reviews had misses, those get highlighted.
 
-Lens weights:
-- Consistency  ███████░░░░░░░░░░░░░ 35%  ← focus here
-- Correctness  ██████░░░░░░░░░░░░░░ 30%
-- Robustness   ████░░░░░░░░░░░░░░░░ 20%
-- Safety       ███░░░░░░░░░░░░░░░░░ 15%
-```
+**Key file:** [`examples/smart-review/scripts/generate.py`](examples/smart-review/scripts/generate.py)
 
-Same skill. Different instructions. Because the script looked at the git diff before generating them.
+### [`self-improve`](examples/self-improve) — Learning capture with data pre-processing
 
-## Example: learning capture
+An agent that logs its own mistakes, detects recurrence, and promotes recurring patterns to permanent docs. The static version was 214 lines of instructions telling the agent how to parse entries and count duplicates. The computed version offloads all bookkeeping to Python:
 
-An agent that tracks its own mistakes across sessions. Static version: 214 lines of instructions telling the agent how to parse entries, find duplicates, count recurrences.
+| What Python does (<100ms) | What the agent gets |
+|---|---|
+| Parses all entries into a hash index | "Here are 4 entries due for promotion" |
+| Finds promotion candidates (count >= 2) | "Here are 12 stale entries to triage" |
+| Does exact + fuzzy duplicate matching | "Next sequence number: LRN-20260313-004" |
+| Detects behavioral drift against principles | "Drift signal: over-explaining (3 hits)" |
 
-Computed version: Python parses everything, the agent gets a summary.
+The agent focuses on judgment calls — *should* this be promoted? *is* this a real drift? — not data parsing.
 
-**What the agent used to do (every session):**
-- Read 1,200 lines of structured entries
-- Scan for matching keys manually
-- Count recurrences by reading text
-- Find entries due for promotion
-- Check for stale entries
+**Key file:** [`examples/self-improve/scripts/generate.py`](examples/self-improve/scripts/generate.py)
 
-**What Python does now (in <100ms):**
-- Parses all entries into a hash index
-- Finds promotion candidates (recurrence >= 2)
-- Flags stale entries (>21 days, never recurred)
-- Computes next entry sequence numbers
-- Does exact + fuzzy matching on duplicate keys
+### [`check-pattern`](examples/check-pattern) — Duplicate prevention helper
 
-The agent gets: "Here are the 4 entries due for promotion, here are the 12 stale entries, here's the Pattern-Key index. Now make the judgment calls."
+A sub-skill called before logging a new entry. The script checks if the pattern already exists (exact match), looks for similar keys (fuzzy match), and tells the agent whether to create a new entry or increment an existing one.
 
-## When to use which
+**Key file:** [`examples/check-pattern/SKILL.md`](examples/check-pattern/SKILL.md) — note how it reuses the self-improve generator with a different argument (`check $ARGUMENTS`).
 
-**Static skills** are the right default. They're simple, readable, anyone can edit them.
+## When to use computed skills
 
-Use them when: instructions don't change. Style guides. Deploy checklists. Commit formats.
+**Start with static.** Static skills are simpler, readable, and easy to edit. Use them for instructions that don't change: style guides, deploy checklists, commit formats.
 
-**Computed skills** are for when static breaks down.
+**Switch to computed when:**
 
-Use them when:
-- What to do depends on what's happening right now
-- The agent parses structured data that code could pre-digest
-- You want the skill to remember past runs
-- Different contexts need different strategies
+- Instructions should change based on what's happening right now
+- The agent is parsing structured data that code could pre-digest
+- You want the skill to remember and adapt across runs
+- Different contexts genuinely need different strategies
 
 ## How to build one
 
-1. Write the skill in static markdown first. Get the instructions right.
-2. Notice what changes between invocations. What context matters?
-3. Write a script that generates the markdown based on that context.
-4. Replace the SKILL.md body with the `!`command`` call.
-5. Add a state file (JSON) if you want memory across runs.
+1. **Write the skill as static markdown first.** Get the instructions right.
+2. **Notice what changes between invocations.** What context matters? What's the agent doing that code could do faster?
+3. **Write a script that generates the markdown.** Read context, make decisions, print markdown to stdout.
+4. **Replace the SKILL.md body** with `!`python3 ${CLAUDE_SKILL_DIR}/scripts/generate.py $ARGUMENTS``
+5. **Add a state file** (JSON) if you want memory across runs.
 
-The script outputs markdown to stdout. That's the whole interface. No framework, no SDK — just print what you want the agent to read.
+The interface is just stdout. No framework, no SDK, any language works.
 
-## What you need
+### Error handling
+
+If the script crashes, the agent gets the traceback as its instructions (or nothing). For production skills, wrap your main function:
+
+```python
+def main():
+    try:
+        # ... your logic ...
+        print(prompt)
+    except Exception as e:
+        # Fallback: print static instructions so the agent isn't left empty-handed
+        print("# Code Review\n\nCheck for bugs, security issues, and consistency.")
+        print(f"\n<!-- generator error: {e} -->")
+```
+
+## Requirements
 
 - Python 3.8+ (or any language that prints to stdout)
-- A skill system that supports `!`command`` or equivalent
+- A skill system that supports `!`command`` preprocessing
 - Works with [Claude Code](https://claude.ai/claude-code) and [OpenClaw](https://openclaw.com)
 
 ## License
