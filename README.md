@@ -1,8 +1,29 @@
 # Computed Skills
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-E8954A.svg)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-E8954A)](https://claude.ai/claude-code)
+[![GitHub stars](https://img.shields.io/github/stars/Joncik91/computed-skills?color=E8954A&logo=github)](https://github.com/Joncik91/computed-skills/stargazers)
+[![Concept + examples](https://img.shields.io/badge/concept%20%2B%20examples-✓-E8954A)]()
+
 **Skills that adapt to what's actually happening.**
 
 A static skill gives the same instructions every time. A computed skill runs a script first — analyzes the situation, pre-digests data, picks a strategy — then hands the agent tailored markdown. The agent never knows a script was involved.
+
+## Table of Contents
+
+- [Why Computed Skills](#why-computed-skills)
+- [Quick Start](#quick-start)
+- [Three Patterns](#three-patterns)
+- [Security Review](#security-review)
+- [When to Use What](#when-to-use-what)
+- [How to Build One](#how-to-build-one)
+- [Examples](#examples)
+- [Production Case Study](#production-case-study)
+- [Prior Art](#prior-art)
+- [Requirements](#requirements)
+- [Security](#security)
+- [License](#license)
 
 ```
 Static:    SKILL.md ──────────────────────────→ Agent reads markdown
@@ -11,7 +32,7 @@ Computed:  SKILL.md → runs script → markdown ─→ Agent reads markdown
 
 Works with [Claude Code](https://claude.ai/claude-code) and any skill system that supports `!`command`` preprocessing. Any language that prints to stdout.
 
-## Why computed skills
+## Why Computed Skills
 
 Static skills have a fundamental problem: they can't see context. A static code review skill gives the same checklist whether you changed 2 files or 40, whether you touched auth code or CSS. A static deploy checklist shows 20 items every time — and agents learn to skim them all.
 
@@ -32,7 +53,7 @@ Same skill, different instructions. The script does the mechanical work (reading
 
 LLMs are bad at: counting entries in a file, comparing timestamps, parsing structured data, doing math, detecting duplicates. Python does all of this in milliseconds with 100% accuracy. When you catch yourself writing static instructions like "parse the file and count how many entries have status=pending," that's a signal to compute instead.
 
-## Quick start
+## Quick Start
 
 **1. Create the skill:**
 
@@ -78,7 +99,7 @@ if __name__ == "__main__":
 
 The `!`command`` syntax is a preprocessing directive — it runs before the agent sees anything and replaces itself with stdout. The agent receives pure markdown, as if you wrote it by hand.
 
-## Three patterns
+## Three Patterns
 
 ### 1. Computed — script generates context-aware instructions
 
@@ -198,7 +219,7 @@ Best for: skills that need both an always-on presence and a manual dashboard.
 
 **Full example:** [`examples/dependency-audit`](examples/dependency-audit)
 
-## When to use what
+## When to Use What
 
 | Situation | Pattern |
 |-----------|---------|
@@ -211,7 +232,7 @@ Best for: skills that need both an always-on presence and a manual dashboard.
 
 **Start static, switch to computed when you notice the agent doing work that code could do faster.**
 
-## How to build one
+## How to Build One
 
 1. **Write the skill as static markdown first.** Get the instructions right.
 2. **Notice what changes between invocations.** What context matters? What does the agent keep getting wrong because it can't see the current state?
@@ -275,7 +296,7 @@ Keep state minimal — just enough to avoid repeating yourself.
 
 Each example is self-contained — clone the repo and use them directly.
 
-## Production case study
+## Production Case Study
 
 These patterns come from running 11 computed skills on a 24/7 autonomous agent. Some lessons learned:
 
@@ -290,7 +311,7 @@ These patterns come from running 11 computed skills on a 24/7 autonomous agent. 
 - Error handling in the generator is critical. If the script crashes, the agent gets an empty prompt or a traceback and behaves unpredictably. Always have a fallback.
 - LLMs cannot do time math. If your skill involves timestamps, timezone conversions, or "how long since X," compute it in Python and inject the result. Never ask the LLM to calculate time differences.
 
-## Prior art
+## Prior Art
 
 The [`!`command`` syntax](https://code.claude.com/docs/en/skills#inject-dynamic-context) is documented by Anthropic under "inject dynamic context" but rarely used for full prompt generation.
 
@@ -308,6 +329,31 @@ Related approaches: [DSPy](https://dspy.ai/) (programmatic prompt compilation vi
 - A skill system that supports `!`command`` preprocessing
 - Works with [Claude Code](https://claude.ai/claude-code) and compatible platforms
 
+## Security
+
+A computed skill runs a script in your shell every time the skill
+fires. That makes the threat model identical to "running someone
+else's script on your machine."
+
+- **Read every script before installing a third-party computed
+  skill.** The `!`command`` syntax executes whatever the SKILL.md
+  says to execute, in your shell, with your filesystem permissions.
+  Static skills can be eyeballed for prompt-injection surface;
+  computed skills can do anything a Python program can.
+- **Pin script paths.** Use `${CLAUDE_SKILL_DIR}/scripts/...` or
+  similar absolute resolution. Don't accept skills that shell out
+  to commands found via `$PATH` lookup — that's a hijack vector.
+- **Don't pass `$ARGUMENTS` blindly to a subprocess.** If your
+  generator script invokes other commands using user-supplied
+  arguments, treat `$ARGUMENTS` as untrusted input. Validate or
+  escape before passing to `subprocess.run`.
+- **Atomic writes for state.** As the [Production Case Study](#production-case-study)
+  notes, a crash mid-write corrupts state and the skill breaks
+  silently. Always write to a temp file and rename.
+
+The patterns here are written as teaching examples. Audit them
+before adopting in load-bearing pipelines.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
