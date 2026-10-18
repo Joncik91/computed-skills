@@ -15,7 +15,6 @@ A static skill gives the same instructions every time. A computed skill runs a s
 - [Why Computed Skills](#why-computed-skills)
 - [Quick Start](#quick-start)
 - [Three Patterns](#three-patterns)
-- [Security Review](#security-review)
 - [When to Use What](#when-to-use-what)
 - [How to Build One](#how-to-build-one)
 - [Examples](#examples)
@@ -70,22 +69,20 @@ my-skill/
 ---
 name: my-skill
 description: What it does and when to trigger it
+argument-hint: "[status]"
 ---
 
-!`python3 ${CLAUDE_SKILL_DIR}/scripts/generate.py $ARGUMENTS`
+!`python3 "${CLAUDE_SKILL_DIR}/scripts/generate.py" --project-dir "${CLAUDE_PROJECT_DIR}" $ARGUMENTS`
 ```
 
 **3. generate.py** (the brain):
 
 ```python
 #!/usr/bin/env python3
-import os, sys
+import sys
 
-def main():
-    args_str = os.environ.get("ARGUMENTS", "").strip()
-    args = args_str.split() if args_str else sys.argv[1:]
-    mode = args[0] if args else ""
-
+def main(argv):
+    mode = argv[0].lower() if argv else ""
     if mode == "status":
         print("# Status Dashboard\n")
         # ... verbose output for manual invocation
@@ -94,8 +91,15 @@ def main():
         # ... context-aware instructions
 
 if __name__ == "__main__":
-    main()
+    try:
+        main([a for a in sys.argv[1:] if a])
+    except Exception as e:
+        print("# Fallback Instructions\n\nRun the standard checklist manually.")
+        print(f"\n<!-- generator error: {e} -->")
+    sys.exit(0)  # a non-zero exit aborts the whole skill
 ```
+
+The full examples also parse `--project-dir`; see [Passing arguments](#passing-arguments).
 
 The `!`command`` syntax is a preprocessing directive — it runs before the agent sees anything and replaces itself with stdout. The agent receives pure markdown, as if you wrote it by hand.
 
@@ -207,13 +211,17 @@ elif mode == "status":
 else:
     # Default: brief context, only if relevant
     if issues:
-        print(f"Note: {len(issues)} dependency issues. Run /dependency-audit for details.")
+        print(f"Note: {len(issues)} dependency issues. Run /dependency-audit status for details.")
+    else:
+        print(f"Dependencies: {total}, no urgent issues.")  # never leave the agent with an empty prompt
 ```
 
 ```yaml
 # SKILL.md — user can invoke with /dependency-audit or /dependency-audit status
-!`python3 ${CLAUDE_SKILL_DIR}/scripts/generate.py $ARGUMENTS`
+!`python3 "${CLAUDE_SKILL_DIR}/scripts/generate.py" --project-dir "${CLAUDE_PROJECT_DIR}" $ARGUMENTS`
 ```
+
+One rule for heartbeat mode: a crash must not be silent. If the generator fails, print the error, because silence would tell the agent everything is healthy.
 
 Best for: skills that need both an always-on presence and a manual dashboard.
 
@@ -242,59 +250,78 @@ Best for: skills that need both an always-on presence and a manual dashboard.
 
 ### Passing arguments
 
-`$ARGUMENTS` in SKILL.md is text substitution — replaced with invocation arguments *before* the shell runs.
+`$ARGUMENTS` in SKILL.md is [text substitution](https://code.claude.com/docs/en/skills): Claude Code replaces it with the arguments as typed, *before* the shell runs the command. The script therefore receives them as ordinary `sys.argv`. There is no `ARGUMENTS` environment variable, so read `sys.argv[1:]`. The same code works when you run the script by hand.
 
-In Python, read arguments like this:
+Two more things the docs spell out:
 
-```python
-args_str = os.environ.get("ARGUMENTS", "").strip()
-args = args_str.split() if args_str else sys.argv[1:]
-```
+- **The command runs in the session's current directory, which moves whenever the agent runs `cd`.** Don't assume `Path.cwd()` is the project root. Pass `"${CLAUDE_PROJECT_DIR}"` explicitly, as the examples do with `--project-dir`.
+- **Quote substituted paths.** `"${CLAUDE_SKILL_DIR}"` breaks without quotes if the path contains a space.
 
-This handles both skill invocation (via environment variable) and direct CLI usage (via argv).
+Don't use `argparse` in a generator: on bad input it calls `sys.exit(2)`, which aborts the skill. Parse by hand, and treat unknown values as "say so in the output", not as an error.
 
 ### Error handling
 
-If the script crashes, the agent gets nothing (or a traceback). For production skills:
+In Claude Code, [any non-zero exit from a `!` command aborts the entire skill invocation](https://code.claude.com/docs/en/skills), not just its own placeholder. An uncaught exception (malformed JSON, a missing file, a git error) therefore takes the whole skill down. Catch everything at the top, print fallback instructions, and always exit 0:
 
 ```python
 try:
-    generate()
+    output = generate()
 except Exception as e:
-    print("# Fallback Instructions\n\nRun the standard checklist manually.")
-    print(f"\n<!-- generator error: {e} -->")
+    output = "# Fallback Instructions\n\nRun the standard checklist manually."
+    output += f"\n\n<!-- generator error: {e} -->"
+print(output)
+sys.exit(0)
 ```
+
+Inside `generate()`, distinguish "failed" from "empty": a git command that errors is not the same as "no changes". The examples' `git()` helper returns `None` on failure for that reason.
 
 ### State files
 
 For skills that should remember across runs (tracking what was reviewed, avoiding duplicate strategies):
 
 ```python
-import json
+import json, os, tempfile
 from pathlib import Path
 
 STATE_FILE = Path(__file__).parent / ".state.json"
+DEFAULT = {"runs": 0}
 
 def load_state():
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
-    return {"runs": 0}
+    try:
+        state = json.loads(STATE_FILE.read_text())
+        return state if isinstance(state, dict) else dict(DEFAULT)
+    except (OSError, ValueError):  # missing or corrupt: start fresh, don't crash
+        return dict(DEFAULT)
 
 def save_state(state):
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    # Atomic: write a temp file in the same directory, then rename over the old one.
+    fd, tmp = tempfile.mkstemp(dir=STATE_FILE.parent, prefix=".state-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, STATE_FILE)
+    except BaseException:
+        os.unlink(tmp)
+        raise
 ```
 
-Keep state minimal — just enough to avoid repeating yourself.
+Keep state minimal: just enough to avoid repeating yourself. If two sessions can run the skill at once, the last writer wins; the rename keeps the file valid, but it doesn't merge.
 
 ## Examples
 
 | Example | Pattern | What it does |
 |---------|---------|-------------|
-| [`smart-review`](examples/smart-review) | Computed | Reads git diff, categorizes changes, picks a review strategy |
-| [`deploy-checklist`](examples/deploy-checklist) | Hybrid | Assesses deployment risk, shows only relevant checklist items |
-| [`dependency-audit`](examples/dependency-audit) | Multi-mode | Scans dependencies with default/status/heartbeat modes |
+| [`smart-review`](examples/smart-review) | Computed | Reviews uncommitted work (including untracked files), or the branch vs the default branch; picks a strategy from the changed paths |
+| [`deploy-checklist`](examples/deploy-checklist) | Hybrid | Assesses committed changes vs the base branch; every detected risk gets its own section; migrations and auth changes force HIGH |
+| [`dependency-audit`](examples/dependency-audit) | Multi-mode | Audits npm/yarn/pnpm/bun, pip, cargo and go; checks lock files against manifests by content; default/status/heartbeat modes |
 
-Each example is self-contained — clone the repo and use them directly.
+Each example is self-contained (Python 3.8+ standard library only), so you can copy one directory into `~/.claude/skills/` or `.claude/skills/` and use it directly.
+
+Tests cover all three:
+
+```bash
+python3 -m unittest discover -s tests -t tests
+```
 
 ## Production Case Study
 
@@ -325,7 +352,7 @@ Related approaches: [DSPy](https://dspy.ai/) (programmatic prompt compilation vi
 
 ## Requirements
 
-- Python 3.8+ (or any language that prints to stdout)
+- Python 3.8+ (or any language that prints to stdout); `git` for `smart-review` and `deploy-checklist`
 - A skill system that supports `!`command`` preprocessing
 - Works with [Claude Code](https://claude.ai/claude-code) and compatible platforms
 
@@ -343,10 +370,18 @@ else's script on your machine."
 - **Pin script paths.** Use `${CLAUDE_SKILL_DIR}/scripts/...` or
   similar absolute resolution. Don't accept skills that shell out
   to commands found via `$PATH` lookup — that's a hijack vector.
-- **Don't pass `$ARGUMENTS` blindly to a subprocess.** If your
-  generator script invokes other commands using user-supplied
-  arguments, treat `$ARGUMENTS` as untrusted input. Validate or
-  escape before passing to `subprocess.run`.
+- **`$ARGUMENTS` lands in a shell command line.** The docs say
+  `$ARGUMENTS` expands to the argument string as typed, and they don't
+  say it is shell-escaped. Treat it as unescaped: `/my-skill $(cmd)`
+  may run `cmd`. That doesn't matter when you type the arguments
+  yourself. It does matter when Claude invokes the skill with arguments
+  taken from untrusted content (an issue body, a web page). For skills
+  like that, set `disable-model-invocation: true` or drop
+  `$ARGUMENTS` from the command.
+- **Validate arguments again inside the script.** Use argument lists,
+  not `shell=True`. Reject values that start with `-` before passing
+  them to tools like git, which would read them as options. Allowlist
+  modes. `deploy-checklist` shows the pattern for git refs.
 - **Atomic writes for state.** As the [Production Case Study](#production-case-study)
   notes, a crash mid-write corrupts state and the skill breaks
   silently. Always write to a temp file and rename.
