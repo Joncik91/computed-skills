@@ -252,6 +252,13 @@ class ModeTests(TempDirCase):
             self.assertEqual(da.main(["heartbeat"]), 0)
         self.assertIn("generator error: RuntimeError: boom", printed.call_args[0][0])
 
+    def test_invalid_project_dir_is_reported_even_in_heartbeat(self) -> None:
+        gone = str(self.dir / "missing")
+        for mode, expect in (("heartbeat", "project directory not found"), ("", "project directory not found")):
+            with mock.patch("builtins.print") as printed:
+                self.assertEqual(da.main(["--project-dir", gone, *([mode] if mode else [])]), 0)
+            self.assertIn(expect, printed.call_args[0][0])
+
     def test_large_project(self) -> None:
         self.write("requirements.txt", "".join(f"p{i}==1\n" for i in range(201)))
         self.assertIn("low:201 total dependencies", msgs(da.audit(self.dir)))

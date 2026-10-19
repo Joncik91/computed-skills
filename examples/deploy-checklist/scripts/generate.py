@@ -476,7 +476,14 @@ The checklist generator failed, so risk could not be assessed. Treat this as HIG
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        output = render(resolve_start_dir(args.project_dir), args.positional)
+        if args.project_dir and not Path(args.project_dir).is_dir():
+            # An explicit but wrong path must not silently assess some other repo.
+            output = (f"## DEPLOYMENT CHECKLIST: UNKNOWN RISK\n\n"
+                      f"{code_span(args.project_dir)} is not a directory, so the deploy contents "
+                      "cannot be determined. Ask the user which directory to deploy from. "
+                      "Do not assume the deploy is safe.")
+        else:
+            output = render(resolve_start_dir(args.project_dir), args.positional)
     except Exception as exc:  # never let a traceback reach the agent
         output = f"{FALLBACK}\n\n<!-- generator error: {type(exc).__name__}: {exc} -->"
     print(output)

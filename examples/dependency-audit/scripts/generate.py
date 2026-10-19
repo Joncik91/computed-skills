@@ -620,7 +620,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     heartbeat = bool(args.positional) and args.positional[0].lower() == "heartbeat"
     try:
-        output = render(resolve_project_root(args.project_dir), args.positional)
+        if args.project_dir and not Path(args.project_dir).is_dir():
+            # An explicit but wrong path must not silently audit some other project.
+            # Not silent in heartbeat mode either: silence means healthy.
+            output = (f"[dependency-audit] project directory not found: {args.project_dir}" if heartbeat else
+                      f"# Dependency Audit: project directory not found\n\n"
+                      f"`{args.project_dir}` is not a directory. Ask the user which project to audit.")
+        else:
+            output = render(resolve_project_root(args.project_dir), args.positional)
     except Exception as exc:
         # Even in heartbeat mode, a crash must NOT be silent: silence means healthy.
         error = f"{type(exc).__name__}: {exc}"

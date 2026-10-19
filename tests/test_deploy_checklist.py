@@ -126,6 +126,13 @@ class RenderTests(GitRepoCase):
         with tempfile.TemporaryDirectory() as plain:
             self.assertIn("not inside a git repository", dc.render(Path(plain), []))
 
+    def test_invalid_project_dir_does_not_fall_back_to_cwd(self) -> None:
+        self.write("migrations/002.sql")
+        proc = self.run_script("deploy-checklist", "--project-dir", str(self.dir / "missing"))
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("UNKNOWN RISK", proc.stdout)
+        self.assertNotIn("002.sql", proc.stdout)
+
     def test_crash_prints_fallback_and_exits_zero(self) -> None:
         with mock.patch.object(dc, "render", side_effect=KeyError("x")), \
                 mock.patch("builtins.print") as printed:

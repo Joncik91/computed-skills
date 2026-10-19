@@ -494,7 +494,13 @@ security, and missing tests. Report issues as `[severity] file:line: description
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        output = render(resolve_start_dir(args.project_dir), args.positional)
+        if args.project_dir and not Path(args.project_dir).is_dir():
+            # An explicit but wrong path must not silently review some other repo.
+            output = (f"# Code Review: project directory not found\n\n"
+                      f"{code_span(args.project_dir)} is not a directory, so there is no diff to review.\n"
+                      "Ask the user which directory to review.")
+        else:
+            output = render(resolve_start_dir(args.project_dir), args.positional)
     except Exception as exc:  # never let a traceback reach the agent
         output = f"{FALLBACK}\n\n<!-- generator error: {type(exc).__name__}: {exc} -->"
     print(output)

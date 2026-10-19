@@ -122,6 +122,13 @@ class RenderTests(GitRepoCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("src/auth.py", proc.stdout)
 
+    def test_invalid_project_dir_does_not_fall_back_to_cwd(self) -> None:
+        self.write("src/auth.py")
+        proc = self.run_script("smart-review", "--project-dir", str(self.dir / "missing"))
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("project directory not found", proc.stdout)
+        self.assertNotIn("auth.py", proc.stdout)
+
     def test_crash_prints_fallback_and_exits_zero(self) -> None:
         with mock.patch.object(sr, "render", side_effect=RuntimeError("boom")), \
                 mock.patch("builtins.print") as printed:
